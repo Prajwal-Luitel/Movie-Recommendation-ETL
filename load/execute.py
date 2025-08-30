@@ -117,9 +117,6 @@ if __name__ == "__main__":
     spark_config["executor_cores"] = sys.argv[8]
     spark_config["executor_instances"] = sys.argv[9]
 
-    if not os.path.exists(input_dir):
-        logger.error(f"Error: input directory {input_dir} does not exist")
-        sys.exit(1)
 
     logger.info("Load stage started")
     start = time.time()
