@@ -8,18 +8,27 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from utility.utility import setup_logging, format_time
 
 
-def create_spark_session(logger):
-    """Initialize Spark session"""
-    return SparkSession.builder.appName("SpotifyDataTransform").getOrCreate()
+def create_spark_session(logger, spark_config):
+    """Initialize Spark session."""
+    logger.info("Starting spark session")
+    return (SparkSession.builder
+            .master(f"spark://{spark_config['master_ip']}:7077")
+            .appName("MovieLoad")
+            .config("spark.driver.memory", spark_config["driver_memory"])
+            .config("spark.executor.memory", spark_config["executor_memory"])
+            .config("spark.executor.cores", spark_config["executor_cores"])
+            .config("spark.executor.instances", spark_config["executor_instances"])
+            .getOrCreate()
+    )
 
 
-def create_postgres_tables(logger, pg_un, pg_pw):
-    """Create postgreSQL tables if they don't exit using pyscopg2"""
+def create_postgres_tables(logger, pg_un, pg_pw, pg_host):
+    """Create postgreSQL tables if they don't EXISTS using pyscopg2"""
     conn = None
     cursor = None
     try:
         conn = psycopg2.connect(
-            dbname="postgres", user=pg_un, password=pg_pw, host="localhost", port="5432"
+            dbname="postgres", user=pg_un, password=pg_pw, host=pg_host, port="5432"
         )
         cursor = conn.cursor()
 
@@ -62,9 +71,9 @@ def create_postgres_tables(logger, pg_un, pg_pw):
             conn.close()
 
 
-def load_to_postgres(logger, spark, input_dir, pg_un, pg_pw):
+def load_to_postgres(logger, spark, input_dir, pg_un, pg_pw, pg_host):
     """Load Parquet files to PostgreSQL."""
-    jdbc_url = "jdbc:postgresql://localhost:5432/postgres"
+    jdbc_url = f"jdbc:postgresql://{pg_host}:5432/postgres"
     connection_properties = {
         "user": pg_un,
         "password": pg_pw,
@@ -92,13 +101,21 @@ if __name__ == "__main__":
 
     logger = setup_logging("load.log")
 
-    if len(sys.argv) != 4:
-        logger.error("Usage: python load/execute.py <input_dir>")
+    if len(sys.argv) != 10:
+        logger.error("Usage: python load/execute.py <input_dir> pg_un pg_pw pg_host master_ip driver_memory executor_memory executor_cores executor_instances")
         sys.exit(1)
 
     input_dir = sys.argv[1]
     pg_un = sys.argv[2]
     pg_pw = sys.argv[3]
+    pg_host = sys.argv[4]
+
+    spark_config = {}
+    spark_config["master_ip"] = sys.argv[5]
+    spark_config["driver_memory"] = sys.argv[6]
+    spark_config["executor_memory"] = sys.argv[7]
+    spark_config["executor_cores"] = sys.argv[8]
+    spark_config["executor_instances"] = sys.argv[9]
 
     if not os.path.exists(input_dir):
         logger.error(f"Error: input directory {input_dir} does not exist")
@@ -107,9 +124,9 @@ if __name__ == "__main__":
     logger.info("Load stage started")
     start = time.time()
 
-    spark = create_spark_session(logger)
-    create_postgres_tables(logger, pg_un, pg_pw)
-    load_to_postgres(logger, spark, input_dir, pg_un, pg_pw)
+    spark = create_spark_session(logger,spark_config)
+    create_postgres_tables(logger, pg_un, pg_pw, pg_host)
+    load_to_postgres(logger, spark, input_dir, pg_un, pg_pw, pg_host)
 
     end = time.time()
     logger.info("Load stage completed")
