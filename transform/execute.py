@@ -1,14 +1,23 @@
-import sys, os, time
+import sys, os, time, sparknlp
 
 from pyspark.sql import SparkSession
 from pyspark.sql import types as T
 from pyspark.sql import functions as F
 
 from sparknlp.base import DocumentAssembler, Finisher
-from sparknlp.annotator import Tokenizer, Normalizer, LemmatizerModel, StopWordsCleaner
+from sparknlp.annotator import (
+    Tokenizer,
+    Normalizer as NLPNormalizer,
+    LemmatizerModel,
+    StopWordsCleaner,
+)
 
 from pyspark.ml import Pipeline
-from pyspark.ml.feature import  CountVectorizer, Normalizer, BucketedRandomProjectionLSH
+from pyspark.ml.feature import (
+    CountVectorizer,
+    Normalizer as VectorNormalizer,
+    BucketedRandomProjectionLSH,
+)
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from utility.utility import setup_logging, format_time
@@ -87,7 +96,7 @@ def load_and_clean(logger, spark, input_dir):
 
 
 def combine_all_feature_columns(logger, movie_df):
-    """Converting the list and string to pyspark array then combining all the columns into one """
+    """Converting the list and string to pyspark array then combining all the columns into one"""
     logger.info("Combining all the feature column into one")
     # Step: Parse array-like strings into ArrayType
     array_schema = T.ArrayType(T.StringType())
@@ -158,7 +167,7 @@ def combine_all_feature_columns(logger, movie_df):
 
 
 def nlp_preprocessing(logger, movie_df):
-    """ Converting the tags to string then nlp pipeline using spark-nlp"""
+    """Converting the tags to string then nlp pipeline using spark-nlp"""
     logger.info("nlp preprocessing the tags column")
     # spark = sparknlp.start()
     # Step 1: Join tags into a single string
@@ -172,7 +181,7 @@ def nlp_preprocessing(logger, movie_df):
 
     # Normalize: lowercase, remove punctuation, keep words & numbers only
     normalizer = (
-        Normalizer()
+        NLPNormalizer()
         .setInputCols(["token"])
         .setOutputCol("normalized")
         .setLowercase(True)
@@ -228,13 +237,14 @@ def vectorizing_the_word(logger, movie_df):
     cv = CountVectorizer(inputCol="tags_lemmatized", outputCol="features")
     cv_model = cv.fit(movie_df)
     movie_df = cv_model.transform(movie_df)
-    
-    # Normalize the vector 
-    normalizer = Normalizer(inputCol="features", outputCol="norm_features", p=2.0)
+
+    # Normalize the vector
+    normalizer = VectorNormalizer(inputCol="features", outputCol="norm_features", p=2.0)
     movie_df = normalizer.transform(movie_df)
     movie_df = movie_df.drop("tags", "tags_str", "tags_lemmatized", "features")
     logger.info("Norm-vectorizing the word success")
     return movie_df
+
 
 def train_lsh_model(logger, movie_df):
     """Train the BucketedRandomProjectionLSH"""
@@ -249,7 +259,7 @@ def train_lsh_model(logger, movie_df):
     return lsh_model
 
 
-def save_data_in_parquet(logger,movie_df, lsh_model, output_dir):
+def save_data_in_parquet(logger, movie_df, lsh_model, output_dir):
     """Saving the dataframe and model as parquet"""
     logger.info("Saving the movie_metadata into parquet")
     movie_metadata = movie_df.select("id", "title", "poster_path", "release_year")
@@ -257,11 +267,11 @@ def save_data_in_parquet(logger,movie_df, lsh_model, output_dir):
         os.path.join(output_dir, "stage1", "movie_metadata")
     )
     logger.info("Saved the movie_metadata into parquet")
-    
+
     logger.info("Saving the lsh_model into parquet")
     lsh_model.write().overwrite().save(os.path.join(output_dir, "stage2", "lsh_model"))
     logger.info("Saved the lsh_model into parquet")
-    
+
     logger.info("Saving the master into parquet")
     master = movie_df.select(
         "id", "title", "poster_path", "revenue", "budget", "release_year", "genres_list"
@@ -270,7 +280,7 @@ def save_data_in_parquet(logger,movie_df, lsh_model, output_dir):
         os.path.join(output_dir, "stage3", "master_table")
     )
     logger.info("Saved the master into parquet")
-    
+
     logger.info("Saving the vector into parquet")
     vector = movie_df.select("id", "norm_features")
     vector.write.mode("overwrite").parquet(os.path.join(output_dir, "stage4", "vector"))
@@ -303,8 +313,8 @@ if __name__ == "__main__":
     movie_df = nlp_preprocessing(logger, movie_df)
     movie_df = vectorizing_the_word(logger, movie_df)
     lsh_model = train_lsh_model(logger, movie_df)
-    save_data_in_parquet(logger,movie_df, lsh_model, output_dir)
-    
+    save_data_in_parquet(logger, movie_df, lsh_model, output_dir)
+
     end = time.time()
     logger.info("Transformation pipeline completed")
     logger.info(f"Total time taken {format_time(end-start)}")
