@@ -15,6 +15,7 @@ from sparknlp.annotator import (
 from pyspark.ml import Pipeline
 from pyspark.ml.feature import (
     CountVectorizer,
+    IDF,
     Normalizer as VectorNormalizer,
     BucketedRandomProjectionLSH,
 )
@@ -121,6 +122,8 @@ def combine_all_feature_columns(logger, movie_df):
         .withColumn("Star2", F.array(F.col("Star2")))
         .withColumn("Star3", F.array(F.col("Star3")))
     )
+    # Create a title array
+    movie_df = movie_df.withColumn("title_array", F.array(F.col("title")))
 
     movie_df = movie_df.withColumn(
         "crews",
@@ -155,13 +158,16 @@ def combine_all_feature_columns(logger, movie_df):
     movie_df = movie_df.withColumn(
         "tags",
         F.concat(
+            F.col("title_array"),
             F.col("all_combined_keywords"),
             F.col("genres_list"),
             F.col("overview"),
             F.col("crews"),
         ),
     )
-    movie_df = movie_df.drop("all_combined_keywords", "overview", "crews")
+    movie_df = movie_df.drop(
+        "all_combined_keywords", "overview", "crews", "title_array"
+    )
     logger.info("Combining success")
     return movie_df
 
@@ -234,9 +240,14 @@ def vectorizing_the_word(logger, movie_df):
     """vectorizing the word then normalizing the vector"""
     logger.info("Norm-vectorizing the word")
     # vectorizing the word
-    cv = CountVectorizer(inputCol="tags_lemmatized", outputCol="features")
+    cv = CountVectorizer(inputCol="tags_lemmatized", outputCol="raw_features", minDF=3)
     cv_model = cv.fit(movie_df)
     movie_df = cv_model.transform(movie_df)
+
+    # Inverse Document Frequency (IDF)
+    idf = IDF(inputCol="raw_features", outputCol="features", minDocFreq=3)
+    idf_model = idf.fit(movie_df)
+    movie_df = idf_model.transform(movie_df)
 
     # Normalize the vector
     normalizer = VectorNormalizer(inputCol="features", outputCol="norm_features", p=2.0)
@@ -252,8 +263,8 @@ def train_lsh_model(logger, movie_df):
     lsh = BucketedRandomProjectionLSH(
         inputCol="norm_features",
         outputCol="hashes",
-        bucketLength=2,  # tune
-        numHashTables=10,  # tune
+        bucketLength=1.95,  # tune
+        numHashTables=14,  # tune
     )
     lsh_model = lsh.fit(movie_df)
     return lsh_model
